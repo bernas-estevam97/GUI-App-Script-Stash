@@ -1,12 +1,13 @@
-
-
-
 import pandas as pd
 from openpyxl import load_workbook
 import os
 from datetime import datetime
 from collections import defaultdict
 import numpy as np
+from openpyxl.styles import PatternFill, Font
+from openpyxl.utils.dataframe import dataframe_to_rows
+from openpyxl import Workbook
+import re
 
 # All possible target labels in Excel
 RAW_STRINGS = [
@@ -67,18 +68,18 @@ data_ids = {
     "2280_1R": ("WT", "Female"),
     "2280_1B":  ("WT", "Female"),
     "2512_1L": ("WT", "Male"),
-    "2512_1R": ("WT", "Male"),
-    "2517_1R ": ("WT", "Male"),
+    "2512_2R": ("WT", "Male"),
+    "2517_1R": ("WT", "Male"),
     "2886": ("WT", "Male"),
     "2887": ("WT", "Male"),
     "3000": ("WT", "Female"),
     "3043": ("TG", "Female"),
-    "3051": ("WT", "Male"),
-    "3054": ("WT", "Male"),
-    "3055": ("TG", "Male"),
+    "1777_1R": ("WT", "Female"),
+    "1777_2R": ("WT", "Female"),
     "3151": ("WT", "Female"),
     "3153": ("TG", "Male"),
-    "3156": ("TG", "Male"),
+    "1825_1R": ("TG", "Male"),
+    "1825_2L": ("WT", "Male"),
     "3220": ("TG", "Female"),
     "3223": ("TG", "Male"),
     "3272": ("WT", "Female"),
@@ -98,6 +99,7 @@ data_ids = {
 
 
 def find_table_data(workbook_path):
+    
     wb = load_workbook(workbook_path, data_only=True)
     result_data = []
 
@@ -178,7 +180,7 @@ def find_table_data(workbook_path):
 
 # 🚀 This is the entrypoint callable from GUI
 def run(input_file):
-    from openpyxl.styles import PatternFill, Font
+    
 
     if not os.path.isfile(input_file):
         raise FileNotFoundError(f"File not found: {input_file}")
@@ -188,21 +190,45 @@ def run(input_file):
     if not data:
         raise ValueError("No 'Table ID' entries found in the provided file.")
 
+    # Step 1: Group by W-tag (e.g., 4W, 8W, etc.)
+    w_groups = defaultdict(list)
+    for entry in data:
+        table_id = entry.get("Table ID", "")
+        w_tag = None
+
+        #HANDLE MULTIPLES OF 4 ONLY
+        # ---------------------------------------------------------------------------------- #
+        # if table_id.endswith("W"):
+        #     parts = table_id.split("_")
+        #     for part in parts:
+        #         if part.endswith("W") and part[:-1].isdigit() and int(part[:-1]) % 4 == 0:
+        #             w_tag = part
+        #             break
+        # ---------------------------------------------------------------------------------- #
+
+        if table_id.endswith("W"):
+            parts = table_id.split("_")
+            for part in parts:
+                if re.fullmatch(r"\d+W", part) or re.fullmatch(r"\d+\+\d+W", part):
+                    w_tag = part
+                    break
+        
+        if w_tag:
+            w_groups[w_tag].append(entry)
+        else:
+            w_groups["Unknown"].append(entry)
+
+    # Step 2: Create output workbook
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     output_file = os.path.join(os.path.dirname(input_file), f"MFrame_clean_output_{timestamp}.xlsx")
 
-    # Step 1: Write with pandas
-    df = pd.DataFrame(data)
-    df.to_excel(output_file, index=False)
+    wb = Workbook()
+    # Remove default sheet
+    wb.remove(wb.active)
 
-    # Step 2: Style with openpyxl
-    wb = load_workbook(output_file)
-    ws = wb.active
-    
-    # Define a font for contrast
+    # Setup styles
     white_font = Font(color="FFFFFFFF")
 
-    # Helper function: get fill color per (genotype, sex)
     def get_fill(genotype, sex):
         if (genotype, sex) == ("TG", "Male"):
             return PatternFill(start_color="FF003366", end_color="FF003366", fill_type="solid"), True
@@ -215,34 +241,55 @@ def run(input_file):
         else:
             return None, False
 
-    # Get "Table ID" column index
-    headers = [cell.value for cell in ws[1]]
-    try:
-        table_id_col_index = headers.index("Table ID") + 1  # openpyxl is 1-based
-    except ValueError:
-        raise ValueError("Table ID column not found in Excel output.")
+    # Step 3: Create a worksheet per W-group
+    def sort_w_tags(w_tag):
+        if w_tag == "Unknown":
+            return float('inf')
+        
+        try:
+            # Match patterns like 56W or 56+1W
+            match = re.match(r"(\d+)(?:\+(\d+))?W", w_tag)
+            if match:
+                base = int(match.group(1))
+                extra = int(match.group(2)) if match.group(2) else 0
+                return base + extra
+        except:
+            pass
 
-    # Apply row coloring
-    for row in ws.iter_rows(min_row=1, max_row=ws.max_row):
-        table_id_cell = row[table_id_col_index - 1]
-        table_id = str(table_id_cell.value).strip()
-        # Match key by substring
-        matched_key = next((k for k in data_ids if k in table_id), None)
+        return float('inf')
+        
+    for w_tag, group_data in sorted(w_groups.items(), key=lambda x: sort_w_tags(x[0])):
+        df = pd.DataFrame(group_data)
+        ws = wb.create_sheet(title=w_tag)
 
-        if matched_key:
-            
-            genotype, sex = data_ids[matched_key]
-            fill, use_white_font = get_fill(genotype, sex)
-            if fill:
+        for r_idx, row in enumerate(dataframe_to_rows(df, index=False, header=True), start=1):
+            for c_idx, value in enumerate(row, start=1):
+                cell = ws.cell(row=r_idx, column=c_idx, value=value)
+
+        # Apply coloring
+        headers = list(df.columns)
+        try:
+            table_id_col_index = headers.index("Table ID") + 1  # 1-based
+        except ValueError:
+            raise ValueError("Table ID column not found in Excel output.")
+
+        for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
+            table_id_cell = row[table_id_col_index - 1]
+            table_id = str(table_id_cell.value).strip()
+
+            matched_key = next((k for k in data_ids if k in table_id), None)
+
+            if matched_key:
+                genotype, sex = data_ids[matched_key]
+                fill, use_white_font = get_fill(genotype, sex)
+
                 for cell in row:
-                    cell.fill = PatternFill(
-                        start_color=fill.start_color,
-                        end_color=fill.end_color,
-                        fill_type="solid"
-                    )
-                    if use_white_font:
-                        cell.font = white_font
-    # Save with styling
+                    if fill:
+                        cell.fill = fill
+                        if use_white_font:
+                            cell.font = white_font
+
+    # Save workbook
     wb.save(output_file)
     return output_file
 

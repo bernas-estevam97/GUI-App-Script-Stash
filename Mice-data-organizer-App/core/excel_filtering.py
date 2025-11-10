@@ -1,21 +1,18 @@
 import os
 import pandas as pd
 import time
-from multiprocessing import Pool
-from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
-import numpy as np
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 
+
 def filter_excel_by_column(index_file_total_tuple):
-    index, file, total_files = index_file_total_tuple
+    index, file, total_files, folder_output = index_file_total_tuple
     try:
         # Load the Excel file
         df_raw = pd.read_excel(file, sheet_name='Raw Data')
 
         column_name_start = '/Feature/Tail/Tip_X'
-        # Find the first index where the column has a non-null value
         valid_indices_beg = df_raw[df_raw[column_name_start].notna()].index
 
         if valid_indices_beg.empty:
@@ -29,9 +26,8 @@ def filter_excel_by_column(index_file_total_tuple):
         df_calc = pd.read_excel(file, sheet_name='Calculated Data')
         filtered_df = df_calc.iloc[start_index:last_index+1]
 
-        # Ensure the 'Time' column is present and valid
         if 'Time' not in filtered_df.columns or filtered_df['Time'].dropna().empty:
-            print(f"[WARNING] File '{file}': 'Time' column missing or empty in filtered data. Skipping...")
+            print(f"[WARNING] File '{file}': 'Time' column missing or empty. Skipping...")
             return
 
         # Calculate time range
@@ -42,18 +38,26 @@ def filter_excel_by_column(index_file_total_tuple):
         averages = filtered_df.mean(numeric_only=True)
         averages_row = pd.DataFrame([averages], columns=filtered_df.columns)
 
-        # Ensure the first column is string type before assignment
+        # Make sure first column is object type before inserting time diff
         averages_row = averages_row.astype({averages_row.columns[0]: 'object'})
         averages_row.iloc[0, 0] = stop_time - start_time
 
         # Append both label row and averages row
         filtered_df = pd.concat([filtered_df, averages_row], ignore_index=True)
 
-        # Save to a new Excel file
-        output_file = os.path.splitext(file)[0]+'_filtered'+os.path.splitext(file)[1]
+        # Determine output file path
+        output_dir = folder_output if folder_output and os.path.isdir(folder_output) else os.path.dirname(file)
+        os.makedirs(output_dir, exist_ok=True)
+
+        output_file = os.path.join(
+            output_dir,
+            os.path.splitext(os.path.basename(file))[0] + "_filtered.xlsx"
+        )
+
+        # Save to Excel
         filtered_df.to_excel(output_file, sheet_name='Calculated Data', index=False)
 
-        # Add merged cell row using openpyxl
+        # Add merged row
         wb = load_workbook(output_file)
         ws = wb['Calculated Data']
 
@@ -66,17 +70,16 @@ def filter_excel_by_column(index_file_total_tuple):
         ws[f"{start_col}{mean_row_index}"] = "MEANS LINE UNDER"
 
         wb.save(output_file)
-        return f"Processed file {index + 1} of {total_files}: {os.path.basename(file)} ---> {os.path.basename(output_file)}"
+        wb.close()
+
+        return f"{os.path.basename(file)} → {os.path.basename(output_file)}"
 
     except Exception as e:
-        # Catch and log any unexpected error
         print(f"[ERROR] File '{file}': {e}. Skipping...")
 
-# Example usage
 
-
-
-def run(folder_input, log_fn=print):
+def run(folder_input, folder_output=None, log_fn=print):
+    """Run the Excel filtering process."""
     if not folder_input:
         log_fn("❌ No input path provided.")
         return
@@ -84,14 +87,20 @@ def run(folder_input, log_fn=print):
         log_fn(f"❌ Invalid path: {folder_input}")
         return
 
-    log_fn(f"📂 Selected folder: {os.path.basename(os.path.normpath(folder_input))}")
+    # Default output folder = same as input
+    if not folder_output or not os.path.isdir(folder_output):
+        folder_output = folder_input
+        log_fn("📁 No output folder selected. Using input folder as output.")
 
+    log_fn(f"📂 Input folder: {os.path.normpath(folder_input)}")
+    log_fn(f"📦 Output folder: {os.path.normpath(folder_output)}")
+
+    # Collect Excel files
     file_paths = [
         os.path.join(folder_input, f)
         for f in os.listdir(folder_input)
         if f.lower().endswith('.xlsx') and not f.startswith('~$')
     ]
-
     if not file_paths:
         log_fn(f"⚠️ No Excel files found in:\n   {folder_input}")
         return
@@ -105,18 +114,21 @@ def run(folder_input, log_fn=print):
     start = time.perf_counter()
 
     with ProcessPoolExecutor(max_workers=num_processes) as executor:
-        futures = [executor.submit(filter_excel_by_column, (i, f, total_files))
-                   for i, f in enumerate(file_paths)]
+        futures = [
+            executor.submit(filter_excel_by_column, (i, f, total_files, folder_output))
+            for i, f in enumerate(file_paths)
+        ]
         for future in as_completed(futures):
             try:
                 result = future.result()
                 if result:
-                    log_fn(f"✅ Finished: {os.path.basename(result)}")
+                    log_fn(f"✅ {result}")
             except Exception as exc:
                 log_fn(f"❌ Error while processing file: {exc}")
 
     finish = time.perf_counter()
     log_fn(f"🎉 All files processed in {round(finish - start, 2)} seconds.")
+
 
 
 def main():

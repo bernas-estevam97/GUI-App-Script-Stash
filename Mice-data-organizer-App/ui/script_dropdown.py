@@ -34,7 +34,7 @@ class ScriptDropdown(ctk.CTkFrame):
         # --- Script dropdown ---
         self.dropdown = ctk.CTkOptionMenu(
             self,
-            values=["Excel Filtering", "Excel Mean time prep", "Mouseframe data organizer"],
+            values=["Excel Filtering", "Excel Mean Time Prep", "Mouseframe data organizer"],
             variable=self.selected_script,
             command=self.on_change,
             height=35
@@ -50,6 +50,10 @@ class ScriptDropdown(ctk.CTkFrame):
         )
         self.extra_wrapper.columnconfigure(0, weight=1)
         self.extra_wrapper.columnconfigure(1, weight=0)
+
+        # 🔧 Place it once (hidden at start)
+        self.extra_wrapper.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 10))
+        self.extra_wrapper.grid_remove()
 
         # --- Extra Fields inside wrapper ---
         self.extra_frame = ctk.CTkFrame(self.extra_wrapper,fg_color=("gray90", "gray13"))
@@ -116,14 +120,33 @@ class ScriptDropdown(ctk.CTkFrame):
         # Update input label
         if script == "mouseframe data organizer":
             self.input_section.label.configure(text="📊 Choose your Excel File:")
-            self.extra_frame.grid_remove()  # hide extra fields
-        else:
-            self.input_section.label.configure(text="📂 Input Directory:")
+            self.extra_wrapper.grid_remove()
+            return  # no extra options for this script
 
-            if script == "excel mean time prep":
-                self.extra_wrapper.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 10))
-            else:
-                self.extra_wrapper.grid_remove()
+        # Default label
+        self.input_section.label.configure(text="📂 Input Directory:")
+
+        # Show wrapper for scripts that need output directory
+        if script in ("excel filtering", "excel mean time prep"):
+            self.extra_wrapper.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 10))
+        else:
+            self.extra_wrapper.grid_remove()
+            return
+
+        # 🔬 Show/Hide Experimentation field based on script type
+        if script == "excel mean time prep":
+            self.experiment_entry.grid(row=3, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 10))
+            # Also show its label
+            for widget in self.extra_frame.winfo_children():
+                if isinstance(widget, ctk.CTkLabel) and "Experimentation" in widget.cget("text"):
+                    widget.grid(row=2, column=0, columnspan=2, sticky="w", padx=10, pady=(0, 5))
+        else:
+            # Hide experiment field and its label for other scripts
+            self.experiment_entry.grid_remove()
+            for widget in self.extra_frame.winfo_children():
+                if isinstance(widget, ctk.CTkLabel) and "Experimentation" in widget.cget("text"):
+                    widget.grid_remove()
+
 
     def browse_output_dir(self):
         path = filedialog.askdirectory()
@@ -136,34 +159,56 @@ class ScriptDropdown(ctk.CTkFrame):
             script = self.selected_script.get().strip().lower()
             input_path = self.input_getter()
 
+            if not input_path:
+                raise ValueError("Please select a valid input path.")
+
+            # --- MOUSEFRAME DATA ORGANIZER ---
             if script == "mouseframe data organizer":
-                if not input_path or not os.path.isfile(input_path):
+                if not os.path.isfile(input_path):
                     raise ValueError("Please select a valid Excel file (.xlsx/.xls).")
                 
                 output_file = mouseframe_data_organizer.run(input_path)
-                self.log(f"✅ Extracted data with file name saved inside the folder: {os.path.basename(os.path.dirname(input_path))}")
+                self.log(f"✅ Extracted data saved inside: {os.path.dirname(output_file)}")
                 self.log(f"📄 Output file: {os.path.basename(output_file)}")
 
+            # --- EXCEL FILTERING ---
             elif script == "excel filtering":
-                if not input_path or not os.path.isdir(input_path):
+                if not os.path.isdir(input_path):
                     raise ValueError("Please select a valid input directory.")
-                excel_filtering.run(input_path, log_fn=self.log)
+                
+                output_dir = self.output_getter()
+                if not output_dir or not os.path.isdir(output_dir):
+                    output_dir = input_path  # default to same folder
 
+                self.log(f"▶️ Running Excel Filtering...")
+                excel_filtering.run(input_path, output_dir, log_fn=self.log)
+
+            # --- EXCEL MEAN TIME PREP ---
             elif script == "excel mean time prep":
-                if not input_path or not os.path.isdir(input_path):
+                if not os.path.isdir(input_path):
                     raise ValueError("Please select a valid input directory.")
+                
                 output_dir = self.output_getter()
                 experiment = self.experiment_getter()
+
                 if not output_dir or not os.path.isdir(output_dir):
-                    raise ValueError("Please select a valid output directory.")
+                    output_dir = input_path  # default to same folder
+
                 if not experiment:
-                    raise ValueError("Experimentation type is required.")
+                    raise ValueError("Please enter an experimentation type before running.")
+
+                self.log(f"▶️ Running Excel Mean Time Prep...")
                 excel_mean_time_prep.run(input_path, output_dir, experiment, log_fn=self.log)
 
             else:
                 raise ValueError("Invalid script selected.")
 
             self.log(f"✅ {self.selected_script.get()} completed successfully.")
+
+        except Exception as e:
+            import traceback
+            self.log(f"❌ Error: {str(e)}\n{traceback.format_exc()}")
+
 
         except Exception as e:
             import traceback
