@@ -2,3 +2,10 @@ venv/
 test/
 desktop.ini
 Python GUI Frameworks.png
+
+# Ignore all .pyc and .pyo files in the app folder
+Mice-data-organizer-App/core/__pycache__/
+Mice-data-organizer-App/ui/__pycache__/
+Mice-data-organizer-App/utils/__pycache__/
+
+

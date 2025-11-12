@@ -1,4 +1,3 @@
-# custom_scroll.py
 import customtkinter as ctk
 import tkinter as tk
 
@@ -25,18 +24,58 @@ class SimpleScrollableFrame(ctk.CTkFrame):
         self.rowconfigure(0, weight=1)
         self.columnconfigure(0, weight=1)
 
-        # Inner frame
+        # Inner frame inside the canvas
         self.inner_frame = ctk.CTkFrame(self, fg_color=bg_color)
         self.window = self.canvas.create_window((0, 0), window=self.inner_frame, anchor="nw")
 
-        # Bindings
+        # Update scroll region when content changes
         self.inner_frame.bind("<Configure>", self._on_frame_configure)
         self.canvas.bind("<Configure>", self._on_canvas_configure)
 
-        # Bind mouse wheel globally once
-        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)  # Windows/macOS
-        self.canvas.bind_all("<Button-4>", self._on_mousewheel)    # Linux scroll up
-        self.canvas.bind_all("<Button-5>", self._on_mousewheel)    # Linux scroll down
+        # Initial scroll bindings
+        self._bind_all_children()
+
+        # Re-bind every time new widgets are added dynamically
+        self.inner_frame.bind("<Map>", lambda e: self._bind_all_children())
+        self.inner_frame.bind("<Configure>", lambda e: self._bind_all_children())
+
+    # ------------------ SCROLL BINDINGS ------------------
+
+    def _bind_all_children(self):
+        """Force all child widgets (even CTkEntry, CTkButton, etc.) to propagate scroll events."""
+        widgets = self.inner_frame.winfo_children()
+        queue = list(widgets)
+        while queue:
+            widget = queue.pop()
+            try:
+                # Bind directly
+                widget.bind("<MouseWheel>", self._on_mousewheel, add="+")
+                widget.bind("<Button-4>", self._on_mousewheel, add="+")
+                widget.bind("<Button-5>", self._on_mousewheel, add="+")
+            except Exception:
+                pass
+            # If widget has children, process them too
+            if isinstance(widget, (tk.Frame, ctk.CTkFrame)):
+                queue.extend(widget.winfo_children())
+
+        # Also bind canvas itself (for empty area)
+        self.canvas.bind("<MouseWheel>", self._on_mousewheel, add="+")
+        self.canvas.bind("<Button-4>", self._on_mousewheel, add="+")
+        self.canvas.bind("<Button-5>", self._on_mousewheel, add="+")
+        self.inner_frame.bind("<MouseWheel>", self._on_mousewheel, add="+")
+        self.inner_frame.bind("<Button-4>", self._on_mousewheel, add="+")
+        self.inner_frame.bind("<Button-5>", self._on_mousewheel, add="+")
+
+    # ------------------ SCROLL BEHAVIOR ------------------
+
+    def _on_mousewheel(self, event):
+        """Scroll canvas when mouse wheel is used anywhere inside."""
+        if event.num == 4:   # Linux scroll up
+            self.canvas.yview_scroll(-1, "units")
+        elif event.num == 5: # Linux scroll down
+            self.canvas.yview_scroll(1, "units")
+        elif event.delta:    # Windows/macOS
+            self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
     def _on_frame_configure(self, event):
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
@@ -51,13 +90,3 @@ class SimpleScrollableFrame(ctk.CTkFrame):
             self.v_scrollbar.grid_remove()
         else:
             self.v_scrollbar.grid(row=0, column=1, sticky="ns")
-
-    def _on_mousewheel(self, event):
-        # Windows/macOS
-        if hasattr(event, "delta") and event.delta != 0:
-            self.canvas.yview_scroll(-1 * int(event.delta / 120), "units")
-        # Linux
-        elif event.num == 4:
-            self.canvas.yview_scroll(-1, "units")
-        elif event.num == 5:
-            self.canvas.yview_scroll(1, "units")
